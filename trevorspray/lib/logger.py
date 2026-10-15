@@ -106,9 +106,7 @@ addLoggingLevel("VERBOSE", 15)
 
 ### LOG TO STDOUT AND FILE ###
 
-log_dir = Path.home() / ".trevorspray"
-log_file = log_dir / "trevorspray.log"
-log_dir.mkdir(exist_ok=True)
+default_data_dir = Path.home() / ".trevorspray"
 
 console_handler = logging.StreamHandler(sys.stdout)
 if any([x.lower() in ["--debug", "--verbose", "-v"] for x in sys.argv]):
@@ -116,14 +114,30 @@ if any([x.lower() in ["--debug", "--verbose", "-v"] for x in sys.argv]):
 else:
     console_handler.addFilter(lambda x: x.levelno >= logging.VERBOSE)
 console_handler.setFormatter(ColoredFormatter("%(levelname)s %(message)s"))
-file_handler = logging.FileHandler(str(log_file))
-file_handler.addFilter(lambda x: x.levelno >= logging.DEBUG)
-file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 
 root_logger = logging.getLogger("trevorspray")
-root_logger.handlers = [console_handler, file_handler]
+root_logger.handlers = [console_handler]
 root_logger.setLevel(logging.DEBUG)
 
 proxy_logger = logging.getLogger("trevorproxy")
-proxy_logger.handlers = [console_handler, file_handler]
+proxy_logger.handlers = [console_handler]
 proxy_logger.setLevel(logging.DEBUG)
+
+
+def set_data_dir(data_dir):
+    """
+    Create the data directory and start logging to <data_dir>/trevorspray.log
+    The file handler is attached here (not at import) so nothing is written until the data dir is known
+    """
+    data_dir = Path(data_dir).expanduser().resolve()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    file_handler = logging.FileHandler(str(data_dir / "trevorspray.log"))
+    file_handler.addFilter(lambda x: x.levelno >= logging.DEBUG)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    )
+    for logger in (root_logger, proxy_logger):
+        logger.handlers = [
+            h for h in logger.handlers if not isinstance(h, logging.FileHandler)
+        ] + [file_handler]
+    return data_dir

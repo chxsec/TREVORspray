@@ -26,12 +26,16 @@ class TrevorSpray:
         self.lockout_question = False
 
         self.sprayed_counter = 0
+        # logins actually sent (excludes ones skipped as previously tried)
+        self.attempt_counter = 0
         self.sprayed_possible = max(1, len(self.options.users)) * max(
             1, len(self.options.passwords)
         )
 
-        self.home = Path.home() / ".trevorspray"
-        self.home.mkdir(exist_ok=True)
+        self.home = Path(
+            getattr(options, "data_dir", None) or Path.home() / ".trevorspray"
+        )
+        self.home.mkdir(parents=True, exist_ok=True)
         self.loot_dir = self.home / "loot"
         self.loot_dir.mkdir(exist_ok=True)
 
@@ -176,17 +180,48 @@ class TrevorSpray:
             return
 
         if not user_pass:
-            for password in [None] if enumerate_users else self.options.passwords:
-                for user in self.options.users:
-                    accepted = False
-                    while not accepted and not self._stop:
-                        for proxy in self.proxies:
-                            accepted = proxy.submit(user, password, enumerate_users)
-                            if accepted:
-                                break
+            passwords = [None] if enumerate_users else self.options.passwords
+            per_round = getattr(self.options, "passwords_per_round", None)
+            round_delay = getattr(self.options, "round_delay", 0)
+            if enumerate_users or not round_delay or not per_round:
+                per_round = len(passwords)
+            rounds = [
+                passwords[i : i + per_round]
+                for i in range(0, len(passwords), per_round)
+            ]
 
-                        if not accepted:
-                            time.sleep(0.1)
+            for round_num, round_passwords in enumerate(rounds, start=1):
+                if self._stop:
+                    break
+                if len(rounds) > 1:
+                    log.info(
+                        f"Round {round_num}/{len(rounds)}: spraying {len(round_passwords):,} password(s) against {len(self.options.users):,} users at {time.ctime()}"
+                    )
+                attempts_before = self.attempt_counter
+
+                for password in round_passwords:
+                    for user in self.options.users:
+                        accepted = False
+                        while not accepted and not self._stop:
+                            for proxy in self.proxies:
+                                accepted = proxy.submit(
+                                    user, password, enumerate_users
+                                )
+                                if accepted:
+                                    break
+
+                            if not accepted:
+                                time.sleep(0.1)
+
+                if round_num < len(rounds) and not self._stop:
+                    self.wait_for_proxies()
+                    self.save()
+                    if self.attempt_counter == attempts_before:
+                        log.info(
+                            f"Round {round_num} was entirely previously-tried logins, skipping the pause"
+                        )
+                        continue
+                    self.round_pause(round_delay, round_num, len(rounds))
         elif user_pass:
             for line in self.options.userpass:
                 username, password = line.split(":", 1)
@@ -206,6 +241,36 @@ class TrevorSpray:
             log.verbose("Waiting for proxy threads to finish")
             time.sleep(2)
 
+    def wait_for_proxies(self):
+        # require two consecutive idle checks, since a thread briefly looks idle
+        # between dequeuing a login and marking itself as running
+        idle_checks = 0
+        while idle_checks < 2 and not self._stop:
+            idle_checks = idle_checks + 1 if self.finished else 0
+            time.sleep(0.5)
+
+    def round_pause(self, minutes, round_num, total_rounds):
+        resume_at = time.time() + (minutes * 60)
+        log.info(
+            f"Round {round_num}/{total_rounds} complete. Pausing {minutes:g} minute(s), next round at {time.ctime(resume_at)}"
+        )
+        # sleep in short increments so Ctrl+C and --exit-on-success stay responsive
+        while not self._stop:
+            remaining = resume_at - time.time()
+            if remaining <= 0:
+                break
+            print(
+                f"       Next round in {int(remaining // 60)}m {int(remaining % 60):02d}s \r",
+                end="",
+                flush=True,
+            )
+            time.sleep(min(1, remaining))
+
+    def save(self):
+        util.update_file(self.existent_users_file, self.existent_users)
+        util.update_file(self.tried_logins_file, self.tried_logins)
+        util.update_file(self.valid_logins_file, self.valid_logins)
+
     def start(self):
         for proxy in self.proxies:
             if proxy is not None:
@@ -220,15 +285,10 @@ class TrevorSpray:
                 proxy.stop()
         with suppress(Exception):
             self.subnet_proxy.stop()
-        # write valid users
-        util.update_file(self.existent_users_file, self.existent_users)
+        self.save()
         log.info(
             f"{len(self.existent_users):,} valid users written to {self.existent_users_file}"
         )
-        # write attempted logins
-        util.update_file(self.tried_logins_file, self.tried_logins)
-        # write valid logins
-        util.update_file(self.valid_logins_file, self.valid_logins)
         log.info(
             f"{len(self.valid_logins):,} valid user/pass combos written to {self.valid_logins_file}"
         )

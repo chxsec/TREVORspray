@@ -131,6 +131,7 @@ class ProxyThread(threading.Thread):
 
                 with self.trevor.lock:
                     self.trevor.tried_logins[login_id] = True
+                    self.trevor.attempt_counter += 1
 
                     if valid:
                         exists = True

